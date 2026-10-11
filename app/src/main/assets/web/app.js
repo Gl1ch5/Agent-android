@@ -13,6 +13,8 @@ const ICONS = {
   trash: '<path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/>',
   edit: '<path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
   check: '<path d="M20 6L9 17l-5-5"/>',
+  up: '<path d="M12 19V5M5 12l7-7 7 7"/>',
+  chevron: '<path d="M6 9l6 6 6-6"/>',
 };
 
 function ic(name) {
@@ -231,30 +233,46 @@ async function renderProject(root, project, token) {
 
   root.append(h("div", { class: "muted small path", text: project.path }));
 
-  const text = h("textarea", { rows: 3, placeholder: "Describe a task for this project" });
-  const modes = ["ASK", "CODE"].map((mode) => h("button", {
-    class: S.mode === mode ? "on" : "",
-    onclick: (event) => {
-      S.mode = mode;
-      for (const button of event.currentTarget.parentNode.children) {
-        button.classList.toggle("on", button.textContent === labelOf(mode));
+  const text = h("textarea", { rows: 2, placeholder: "Describe a task for this project" });
+  const modeMenu = dropdown({
+    label: () => labelOf(S.mode),
+    items: () => ["ASK", "CODE"].map((mode) => ({
+      label: labelOf(mode),
+      selected: S.mode === mode,
+      onpick: () => { S.mode = mode; },
+    })),
+  });
+  const modelMenu = dropdown({
+    label: () => activeProvider()?.selectedModel || "No model",
+    items: () => {
+      const provider = activeProvider();
+      if (!provider || !provider.models.length) {
+        return [{ label: "Add models in settings", note: "", selected: false, onpick: () => {} }];
       }
+      return provider.models.map((model) => ({
+        label: model,
+        selected: model === provider.selectedModel,
+        onpick: () => {
+          provider.selectedModel = model;
+          ask("saveProvider", { provider });
+        },
+      }));
     },
-  }, labelOf(mode)));
+  });
 
   root.append(h("section", { class: "composer" },
     text,
     h("div", { class: "row" },
-      h("div", { class: "seg" }, modes),
+      h("div", { class: "chip-row" }, modeMenu, modelMenu),
       h("button", {
-        class: "primary icon-only", "aria-label": "Start task",
+        class: "send", "aria-label": "Start task",
         onclick: async () => {
           const message = text.value.trim();
           if (!message) return;
           const task = await ask("newTask", { projectId: project.id, mode: S.mode, text: message });
           if (task) navigate({ name: "task", project, taskId: task.id });
         },
-      }, ic("send")),
+      }, ic("up")),
     ),
   ));
 
@@ -276,6 +294,49 @@ async function renderProject(root, project, token) {
 function labelOf(mode) {
   return mode === "ASK" ? "Ask" : "Code";
 }
+
+function activeProvider() {
+  return S.providers.find((provider) => provider.id === S.activeId) || S.providers[0] || null;
+}
+
+// A pill that opens a menu of choices under it. `label` and `items` are re-read on every open.
+function dropdown({ label, items }) {
+  const wrap = h("div", { class: "dd" });
+  const pill = h("button", { class: "pill", type: "button" });
+  const menu = h("div", { class: "menu", hidden: true });
+
+  const paint = () => {
+    pill.replaceChildren(h("span", { text: label() }), ic("chevron"));
+    menu.replaceChildren(...items().map((item) => h("button", {
+      class: item.selected ? "item on" : "item",
+      type: "button",
+      onclick: (event) => {
+        event.stopPropagation();
+        menu.hidden = true;
+        item.onpick();
+        paint();
+      },
+    }, h("span", { text: item.label }), item.selected ? ic("check") : "")));
+  };
+
+  pill.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const open = menu.hidden;
+    closeMenus();
+    if (open) {
+      paint();
+      menu.hidden = false;
+    }
+  });
+  wrap.append(pill, menu);
+  paint();
+  return wrap;
+}
+
+function closeMenus() {
+  for (const menu of document.querySelectorAll(".menu")) menu.hidden = true;
+}
+document.addEventListener("click", closeMenus);
 
 function badge(status) {
   return h("span", { class: `badge ${status.toLowerCase()}`, text: status.toLowerCase() });
@@ -363,16 +424,16 @@ function followUp(project, task) {
   return h("section", { class: "followup" },
     text,
     h("div", { class: "row end" },
-      running ? h("button", { class: "secondary", onclick: () => ask("cancel", { taskId: task.id }) }, ic("stop"), "Stop") : "",
+      running ? h("button", { class: "pill", onclick: () => ask("cancel", { taskId: task.id }) }, ic("stop"), "Stop") : "",
       h("button", {
-        class: "primary icon-only", "aria-label": "Send", disabled: running,
+        class: "send", "aria-label": "Send", disabled: running,
         onclick: async () => {
           const message = text.value.trim();
           if (!message) return;
           const result = await ask("followUp", { projectId: project.id, taskId: task.id, text: message });
           if (result) render();
         },
-      }, ic("send")),
+      }, ic("up")),
     ),
   );
 }

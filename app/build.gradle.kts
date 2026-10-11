@@ -2,6 +2,8 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    // Generates the serializer() accessors for the @Serializable classes declared in this module.
+    kotlin("plugin.serialization")
 }
 
 // CI passes these so every nightly installs as an upgrade of the previous one.

@@ -78,102 +78,105 @@ class AgentBridge(
         }
     }
 
-    private fun handle(op: String, req: JsonObject): JsonObject = when (op) {
-        "state" -> buildJsonObject {
-            put("allFiles", allFilesOk())
-            put("projects", AgentJson.encodeToJsonElement(ListSerializer(Project.serializer()), settings.projects))
-            put("providers", providersJson())
-            put("activeId", settings.activeProviderId)
-        }
-        "createProject" -> {
-            val name = req.text("name").trim()
-            if (name.isEmpty()) return failure("Enter a project name.")
-            val dir = File(context.filesDir, "projects/${slug(name)}-${UUID.randomUUID().toString().take(6)}")
-            dir.mkdirs()
-            projectJson(addProject(Project(UUID.randomUUID().toString(), name, dir.path)))
-        }
-        "addFolder" -> {
-            val dir = File(req.text("path"))
-            if (!dir.isDirectory) return failure("Folder not found: ${dir.path}")
-            val canonical = dir.canonicalPath
-            val inAppStorage = canonical.startsWith(context.filesDir.canonicalPath)
-            if (!inAppStorage && !allFilesOk()) {
-                return failure("Grant all-files access first, so projects can use folders outside the app.")
+    // Block body, not an expression body: the branches use `return` for early failures.
+    private suspend fun handle(op: String, req: JsonObject): JsonObject {
+        return when (op) {
+            "state" -> buildJsonObject {
+                put("allFiles", allFilesOk())
+                put("projects", AgentJson.encodeToJsonElement(ListSerializer(Project.serializer()), settings.projects))
+                put("providers", providersJson())
+                put("activeId", settings.activeProviderId)
             }
-            if (settings.projects.any { it.path == canonical }) return failure("This folder is already a project.")
-            projectJson(addProject(Project(UUID.randomUUID().toString(), dir.name.ifBlank { canonical }, canonical)))
-        }
-        "removeProject" -> {
-            val id = req.text("id")
-            settings.projects = settings.projects.filterNot { it.id == id }
-            buildJsonObject { put("ok", true) }
-        }
-        "openAllFiles" -> {
-            host.openAllFilesSettings()
-            buildJsonObject { put("ok", true) }
-        }
-        "saveProvider" -> {
-            val provider = AgentJson.decodeFromJsonElement(ProviderConfig.serializer(), req.getValue("provider"))
-            if (provider.name.isBlank()) return failure("Enter a name for this provider.")
-            val list = settings.providers.filterNot { it.id == provider.id } + provider
-            settings.providers = list
-            if (settings.providers.none { it.id == settings.activeProviderId }) settings.activeProviderId = provider.id
-            buildJsonObject { put("providers", providersJson()) }
-        }
-        "deleteProvider" -> {
-            val remaining = settings.providers.filterNot { it.id == req.text("id") }
-            if (remaining.isEmpty()) return failure("Keep at least one provider.")
-            settings.providers = remaining
-            if (remaining.none { it.id == settings.activeProviderId }) settings.activeProviderId = remaining.first().id
-            buildJsonObject { put("providers", providersJson()) }
-        }
-        "setActive" -> {
-            settings.activeProviderId = req.text("id")
-            buildJsonObject { put("activeId", settings.activeProviderId) }
-        }
-        "fetchModels" -> {
-            val provider = AgentJson.decodeFromJsonElement(ProviderConfig.serializer(), req.getValue("provider"))
-            if (provider.kind != ProviderKind.OPENAI_COMPATIBLE) {
-                return failure("Anthropic does not expose a model list here. Enter the model ID by hand.")
+            "createProject" -> {
+                val name = req.text("name").trim()
+                if (name.isEmpty()) return failure("Enter a project name.")
+                val dir = File(context.filesDir, "projects/${slug(name)}-${UUID.randomUUID().toString().take(6)}")
+                dir.mkdirs()
+                projectJson(addProject(Project(UUID.randomUUID().toString(), name, dir.path)))
             }
-            val models = OpenAiClient.listModels(provider.baseUrl, provider.apiKey)
-            buildJsonObject { put("models", buildJsonArray { models.forEach { add(JsonPrimitive(it)) } }) }
+            "addFolder" -> {
+                val dir = File(req.text("path"))
+                if (!dir.isDirectory) return failure("Folder not found: ${dir.path}")
+                val canonical = dir.canonicalPath
+                val inAppStorage = canonical.startsWith(context.filesDir.canonicalPath)
+                if (!inAppStorage && !allFilesOk()) {
+                    return failure("Grant all-files access first, so projects can use folders outside the app.")
+                }
+                if (settings.projects.any { it.path == canonical }) return failure("This folder is already a project.")
+                projectJson(addProject(Project(UUID.randomUUID().toString(), dir.name.ifBlank { canonical }, canonical)))
+            }
+            "removeProject" -> {
+                val id = req.text("id")
+                settings.projects = settings.projects.filterNot { it.id == id }
+                buildJsonObject { put("ok", true) }
+            }
+            "openAllFiles" -> {
+                host.openAllFilesSettings()
+                buildJsonObject { put("ok", true) }
+            }
+            "saveProvider" -> {
+                val provider = AgentJson.decodeFromJsonElement(ProviderConfig.serializer(), req.getValue("provider"))
+                if (provider.name.isBlank()) return failure("Enter a name for this provider.")
+                val list = settings.providers.filterNot { it.id == provider.id } + provider
+                settings.providers = list
+                if (settings.providers.none { it.id == settings.activeProviderId }) settings.activeProviderId = provider.id
+                buildJsonObject { put("providers", providersJson()) }
+            }
+            "deleteProvider" -> {
+                val remaining = settings.providers.filterNot { it.id == req.text("id") }
+                if (remaining.isEmpty()) return failure("Keep at least one provider.")
+                settings.providers = remaining
+                if (remaining.none { it.id == settings.activeProviderId }) settings.activeProviderId = remaining.first().id
+                buildJsonObject { put("providers", providersJson()) }
+            }
+            "setActive" -> {
+                settings.activeProviderId = req.text("id")
+                buildJsonObject { put("activeId", settings.activeProviderId) }
+            }
+            "fetchModels" -> {
+                val provider = AgentJson.decodeFromJsonElement(ProviderConfig.serializer(), req.getValue("provider"))
+                if (provider.kind != ProviderKind.OPENAI_COMPATIBLE) {
+                    return failure("Anthropic does not expose a model list here. Enter the model ID by hand.")
+                }
+                val models = OpenAiClient.listModels(provider.baseUrl, provider.apiKey)
+                buildJsonObject { put("models", buildJsonArray { models.forEach { add(JsonPrimitive(it)) } }) }
+            }
+            "tasks" -> {
+                val project = projectById(req.text("projectId")) ?: return failure("Project not found.")
+                val store = TaskStore(File(project.path))
+                val tasks = store.list().map { reconcile(store, it) }
+                buildJsonObject { put("tasks", buildJsonArray { tasks.forEach { add(summary(it)) } }) }
+            }
+            "task" -> {
+                val project = projectById(req.text("projectId")) ?: return failure("Project not found.")
+                val task = TaskStore(File(project.path)).load(req.text("taskId")) ?: return failure("Task not found.")
+                AgentJson.encodeToJsonElement(TaskRecord.serializer(), reconcile(TaskStore(File(project.path)), task))
+                    .jsonObject
+            }
+            "newTask" -> {
+                val project = projectById(req.text("projectId")) ?: return failure("Project not found.")
+                val text = req.text("text").trim()
+                if (text.isEmpty()) return failure("Describe the task first.")
+                val mode = TaskMode.valueOf(req.text("mode").ifBlank { "CODE" })
+                val task = TaskStore(File(project.path)).create(title = text.lineSequence().first().take(80), mode = mode)
+                start(project, task, text)
+                summary(task)
+            }
+            "followUp" -> {
+                val project = projectById(req.text("projectId")) ?: return failure("Project not found.")
+                val text = req.text("text").trim()
+                if (text.isEmpty()) return failure("Write a message first.")
+                val task = TaskStore(File(project.path)).load(req.text("taskId")) ?: return failure("Task not found.")
+                if (runs.containsKey(task.id)) return failure("This task is still running.")
+                start(project, task, text)
+                summary(task)
+            }
+            "cancel" -> {
+                runs[req.text("taskId")]?.cancel()
+                buildJsonObject { put("ok", true) }
+            }
+            else -> failure("Unknown request: $op")
         }
-        "tasks" -> {
-            val project = projectById(req.text("projectId")) ?: return failure("Project not found.")
-            val store = TaskStore(File(project.path))
-            val tasks = store.list().map { reconcile(store, it) }
-            buildJsonObject { put("tasks", buildJsonArray { tasks.forEach { add(summary(it)) } }) }
-        }
-        "task" -> {
-            val project = projectById(req.text("projectId")) ?: return failure("Project not found.")
-            val task = TaskStore(File(project.path)).load(req.text("taskId")) ?: return failure("Task not found.")
-            AgentJson.encodeToJsonElement(TaskRecord.serializer(), reconcile(TaskStore(File(project.path)), task))
-                .jsonObject
-        }
-        "newTask" -> {
-            val project = projectById(req.text("projectId")) ?: return failure("Project not found.")
-            val text = req.text("text").trim()
-            if (text.isEmpty()) return failure("Describe the task first.")
-            val mode = TaskMode.valueOf(req.text("mode").ifBlank { "CODE" })
-            val task = TaskStore(File(project.path)).create(title = text.lineSequence().first().take(80), mode = mode)
-            start(project, task, text)
-            summary(task)
-        }
-        "followUp" -> {
-            val project = projectById(req.text("projectId")) ?: return failure("Project not found.")
-            val text = req.text("text").trim()
-            if (text.isEmpty()) return failure("Write a message first.")
-            val task = TaskStore(File(project.path)).load(req.text("taskId")) ?: return failure("Task not found.")
-            if (runs.containsKey(task.id)) return failure("This task is still running.")
-            start(project, task, text)
-            summary(task)
-        }
-        "cancel" -> {
-            runs[req.text("taskId")]?.cancel()
-            buildJsonObject { put("ok", true) }
-        }
-        else -> failure("Unknown request: $op")
     }
 
     /** A RUNNING task with no live job was cut off by a process restart. Mark it instead of hanging. */
