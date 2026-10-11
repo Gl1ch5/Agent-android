@@ -85,10 +85,11 @@ object ChangeTracker {
         while (i < a.size || j < b.size) {
             when {
                 i < a.size && j < b.size && a[i] == b[j] -> { i++; j++ }
-                j < b.size && (i == a.size || lcs[i * width + j + 1] >= lcs[(i + 1) * width + j]) -> {
-                    out.append("+ ").append(b[j]).append('\n'); j++
+                // Removals come before additions when both are possible.
+                i < a.size && (j == b.size || lcs[(i + 1) * width + j] >= lcs[i * width + j + 1]) -> {
+                    out.append("- ").append(a[i]).append('\n'); i++
                 }
-                else -> { out.append("- ").append(a[i]).append('\n'); i++ }
+                else -> { out.append("+ ").append(b[j]).append('\n'); j++ }
             }
         }
         return out.toString().trimEnd()
