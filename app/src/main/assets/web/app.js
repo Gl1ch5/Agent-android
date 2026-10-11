@@ -103,6 +103,7 @@ const S = {
   projects: [],
   providers: [],
   activeId: null,
+  mcpServers: [],
   mode: "CODE",
 };
 
@@ -140,6 +141,8 @@ async function refresh() {
   S.projects = state.projects;
   S.providers = state.providers;
   S.activeId = state.activeId;
+  S.mcpServers = state.mcpServers || [];
+  S.hasGithubToken = !!state.hasGithubToken;
 }
 
 async function render() {
@@ -192,6 +195,7 @@ function renderProjects(root) {
 
 function openNewProject() {
   const name = input("text", "", "Project name");
+  const url = input("url", "", "https://github.com/owner/repo");
   openSheet("New project", [
     h("label", { class: "field" }, h("span", { text: "Name" }), name),
     h("button", {
@@ -204,8 +208,40 @@ function openNewProject() {
         navigate({ name: "project", project });
       },
     }, "Create project"),
+    h("span", { class: "muted small", text: "Or clone a GitHub repository" }),
+    h("label", { class: "field" }, h("span", { text: "Repository URL" }), url),
+    h("button", {
+      class: "secondary",
+      onclick: async () => {
+        const project = await ask("cloneRepo", { url: url.value.trim() });
+        if (!project) return;
+        closeSheet();
+        await refresh();
+        navigate({ name: "project", project });
+      },
+    }, ic("folder"), "Clone repository"),
   ]);
   name.focus();
+}
+
+// GitHub token for cloning private repos and opening pull requests. It stays in app storage.
+function githubSection() {
+  const token = input("password", "", S.hasGithubToken ? "Saved. Enter a new token to replace it" : "Personal access token");
+  return [
+    h("h2", { text: "GitHub" }),
+    h("label", { class: "field" }, h("span", { text: "Token" }), token),
+    h("button", {
+      class: "secondary",
+      onclick: async () => {
+        const result = await ask("saveGithubToken", { token: token.value });
+        if (result) {
+          S.hasGithubToken = result.hasGithubToken;
+          toast(result.hasGithubToken ? "Token saved." : "Token removed.");
+          openProviders();
+        }
+      },
+    }, "Save token"),
+  ];
 }
 
 async function addFolder() {
@@ -364,6 +400,19 @@ async function renderTask(root, project, taskId, token) {
   root.append(h("section", { class: "transcript", id: "live" }));
 
   root.append(changesSection(task.changes));
+  if (task.status === "DONE" && task.changes.length) {
+    root.append(h("div", { class: "row end" },
+      h("button", {
+        class: "secondary",
+        onclick: async (event) => {
+          event.currentTarget.disabled = true;
+          const result = await ask("openPullRequest", { projectId: project.id, taskId: task.id });
+          event.currentTarget.disabled = false;
+          if (result) toast(`Pull request opened: ${result.url}`);
+        },
+      }, ic("up"), "Open pull request"),
+    ));
+  }
   root.append(followUp(project, task));
   root.scrollTop = root.scrollHeight;
 }
@@ -457,9 +506,39 @@ function addLive(event) {
 }
 
 // Called by Kotlin for agent progress and for runs that have finished.
+// A CODE task pauses until the user allows or denies a state-changing tool call.
+function approvalCard(event) {
+  const card = h("div", { class: "approval" },
+    h("div", { class: "approval-title", text: `Allow ${event.tool}?` }),
+    h("pre", { class: "approval-input", text: pretty(event.input) }),
+    h("div", { class: "row end" },
+      h("button", { class: "pill", onclick: () => decide(card, event.approvalId, false) }, "Deny"),
+      h("button", { class: "allow", onclick: () => decide(card, event.approvalId, true) }, "Allow"),
+    ),
+  );
+  return card;
+}
+
+function decide(card, approvalId, allow) {
+  card.querySelector(".approval-title").textContent = allow ? `Allowed` : `Denied`;
+  card.querySelector(".row")?.remove();
+  ask("approve", { approvalId, allow });
+}
+
 window.__event = (event) => {
   if (event.type === "taskFinished") {
     if ((route.name === "task" && route.taskId === event.taskId) || route.name === "project") render();
+    return;
+  }
+  if (event.type === "approval") {
+    if (route.name === "task" && route.taskId === event.taskId) {
+      const live = $("#live");
+      if (live) live.append(approvalCard(event));
+      const view = $("#view");
+      view.scrollTop = view.scrollHeight;
+    } else {
+      toast(`Approval needed for ${event.tool}. Open the task to answer.`);
+    }
     return;
   }
   if (event.type === "agent" && route.name === "task" && route.taskId === event.taskId) addLive(event);
@@ -516,7 +595,47 @@ async function openProviders() {
   openSheet("Providers", [
     list,
     h("button", { class: "primary", onclick: () => editProvider(null) }, ic("plus"), "Add provider"),
+    ...mcpSection(),
+    ...githubSection(),
   ]);
+}
+
+// MCP servers: remote tool servers over HTTP. Their tools ask for approval before they run.
+function mcpSection() {
+  const servers = S.mcpServers;
+  const name = input("text", "", "Name, for example docs");
+  const url = input("url", "", "https://example.com/mcp");
+  const save = async (next) => {
+    const result = await ask("saveMcpServers", { servers: next });
+    if (result) {
+      S.mcpServers = result.mcpServers;
+      openProviders();
+    }
+  };
+  return [
+    h("h2", { text: "MCP servers" }),
+    ...servers.map((server) => h("article", { class: "card" },
+      h("div", { class: "card-main" },
+        h("div", { class: "card-title", text: server.name }),
+        h("div", { class: "muted small mono", text: server.url }),
+      ),
+      h("button", {
+        class: "icon-btn", "aria-label": "Remove server",
+        onclick: () => save(servers.filter((s) => s.id !== server.id)),
+      }, ic("trash")),
+    )),
+    h("label", { class: "field" }, h("span", { text: "Name" }), name),
+    h("label", { class: "field" }, h("span", { text: "URL" }), url),
+    h("button", {
+      class: "secondary",
+      onclick: () => {
+        const label = name.value.trim();
+        const address = url.value.trim();
+        if (!label || !address) return toast("Enter a name and a URL.");
+        return save([...servers, { id: newId(), name: label, url: address }]);
+      },
+    }, "Add MCP server"),
+  ];
 }
 
 function editProvider(existing) {

@@ -156,6 +156,19 @@ h2 { font-size: 13px; font-weight: 600; letter-spacing: 0.04em; text-transform: 
   background: var(--paper); color: var(--panel);
 }
 .send:disabled { opacity: 0.35; }
+.approval {
+  display: flex; flex-direction: column; gap: 8px;
+  border: 1px solid var(--line); border-radius: 14px; padding: 12px; background: var(--surface);
+}
+.approval-title { font-weight: 600; }
+.approval-input {
+  margin: 0; max-height: 160px; overflow: auto; white-space: pre-wrap;
+  font-size: 12px; color: var(--muted);
+}
+.allow {
+  height: 36px; padding: 0 16px; border: 0; border-radius: 999px;
+  background: var(--paper); color: var(--panel); font: inherit; font-weight: 600;
+}
 .send .ic svg { width: 18px; height: 18px; }
 textarea, input[type="text"], input[type="url"], input[type="password"] {
   width: 100%;

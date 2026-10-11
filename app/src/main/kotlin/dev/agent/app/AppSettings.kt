@@ -2,6 +2,7 @@ package dev.agent.app
 
 import android.content.Context
 import dev.agent.core.llm.AgentJson
+import dev.agent.core.mcp.McpServerConfig
 import dev.agent.core.provider.ProviderConfig
 import dev.agent.core.provider.defaultProviders
 import kotlinx.serialization.builtins.ListSerializer
@@ -44,9 +45,31 @@ class AppSettings(context: Context) {
                 .apply()
         }
 
+    var mcpServers: List<McpServerConfig>
+        get() {
+            val raw = prefs.getString(KEY_MCP, null) ?: return emptyList()
+            return try {
+                AgentJson.decodeFromString(ListSerializer(McpServerConfig.serializer()), raw)
+            } catch (e: Exception) {
+                emptyList()
+            }
+        }
+        set(value) {
+            prefs.edit()
+                .putString(KEY_MCP, AgentJson.encodeToString(ListSerializer(McpServerConfig.serializer()), value))
+                .apply()
+        }
+
+    /** Personal access token for cloning private repos and opening pull requests. Empty when unset. */
+    var githubToken: String
+        get() = prefs.getString(KEY_GITHUB, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_GITHUB, value).apply()
+
     private companion object {
+        const val KEY_GITHUB = "github_token"
         const val KEY_PROVIDERS = "providers"
         const val KEY_ACTIVE = "active_provider"
         const val KEY_PROJECTS = "projects"
+        const val KEY_MCP = "mcp_servers"
     }
 }

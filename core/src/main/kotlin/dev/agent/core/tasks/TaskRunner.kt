@@ -5,6 +5,7 @@ import dev.agent.core.agent.AgentEvent
 import dev.agent.core.llm.LlmClient
 import dev.agent.core.tools.Tool
 import dev.agent.core.tools.Workspace
+import kotlinx.serialization.json.JsonObject
 import java.io.File
 
 /**
@@ -18,6 +19,8 @@ class TaskRunner(
     private val projectRoot: File,
     private val systemPrompt: (Workspace) -> String,
     private val onEvent: (taskId: String, AgentEvent) -> Unit = { _, _ -> },
+    /** Asked before a tool that changes state runs. Returns true to allow it. */
+    private val approve: suspend (taskId: String, toolName: String, input: JsonObject) -> Boolean = { _, _, _ -> true },
 ) {
     /** Sends [message] as the next turn of [task]. Returns the saved record. */
     suspend fun run(task: TaskRecord, message: String): TaskRecord {
@@ -30,8 +33,8 @@ class TaskRunner(
             llm = llm,
             tools = ToolPolicy.toolsFor(task.mode, allTools),
             workspace = workspace,
-            // CODE tasks run without an approval prompt for now; ASK tasks never see write tools.
-            approval = { _, _ -> true },
+            // ASK tasks never see write tools; CODE tasks ask before each state-changing call.
+            approval = { name, input -> approve(task.id, name, input) },
             systemPrompt = { modePrompt(task.mode, systemPrompt(workspace)) },
             onEvent = { event ->
                 if (event is AgentEvent.Error) error = event.message

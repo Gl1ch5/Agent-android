@@ -8,6 +8,8 @@ import dev.agent.core.agent.ProjectMemory
 import dev.agent.core.agent.SystemPrompt
 import dev.agent.core.llm.AgentJson
 import dev.agent.core.llm.OpenAiClient
+import dev.agent.core.mcp.McpRegistry
+import dev.agent.core.mcp.McpServerConfig
 import dev.agent.core.provider.ProviderConfig
 import dev.agent.core.provider.ProviderKind
 import dev.agent.core.provider.createClient
@@ -20,6 +22,7 @@ import dev.agent.core.tasks.TaskStore
 import dev.agent.core.tools.Workspace
 import dev.agent.core.tools.defaultTools
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -29,6 +32,7 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -58,6 +62,7 @@ class AgentBridge(
 
     private val settings = AppSettings(context)
     private val runs = ConcurrentHashMap<String, Job>()
+    private val approvals = ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
 
     @JavascriptInterface
     fun request(raw: String) {
@@ -86,6 +91,8 @@ class AgentBridge(
                 put("projects", AgentJson.encodeToJsonElement(ListSerializer(Project.serializer()), settings.projects))
                 put("providers", providersJson())
                 put("activeId", settings.activeProviderId)
+            put("mcpServers", AgentJson.encodeToJsonElement(ListSerializer(McpServerConfig.serializer()), settings.mcpServers))
+            put("hasGithubToken", settings.githubToken.isNotEmpty())
             }
             "createProject" -> {
                 val name = req.text("name").trim()
@@ -171,6 +178,45 @@ class AgentBridge(
                 start(project, task, text)
                 summary(task)
             }
+            "saveGithubToken" -> {
+                settings.githubToken = req.text("token").trim()
+                buildJsonObject { put("hasGithubToken", settings.githubToken.isNotEmpty()) }
+            }
+            "cloneRepo" -> {
+                val url = req.text("url").trim()
+                if (!url.startsWith("https://")) return failure("Enter an https:// repository URL.")
+                val name = url.trimEnd('/').substringAfterLast('/').removeSuffix(".git").ifBlank { "repo" }
+                val dir = File(context.filesDir, "projects/${slug(name)}-${UUID.randomUUID().toString().take(6)}")
+                try {
+                    GitHubOps.clone(url, dir, settings.githubToken)
+                } catch (e: Exception) {
+                    dir.deleteRecursively()
+                    return failure("Clone failed: ${e.message ?: e::class.java.simpleName}")
+                }
+                projectJson(addProject(Project(UUID.randomUUID().toString(), name, dir.path)))
+            }
+            "openPullRequest" -> {
+                val project = projectById(req.text("projectId")) ?: return failure("Project not found.")
+                val task = TaskStore(File(project.path)).load(req.text("taskId")) ?: return failure("Task not found.")
+                if (settings.githubToken.isBlank()) return failure("Add a GitHub token in Settings first.")
+                if (task.changes.isEmpty()) return failure("This task has no file changes.")
+                val body = "Changes made by the agent in task \"${task.title}\"."
+                val branch = GitHubOps.branchFor(task.title, task.id)
+                val url = GitHubOps.openPullRequest(File(project.path), branch, task.title, body, settings.githubToken)
+                buildJsonObject { put("url", url) }
+            }
+            "saveMcpServers" -> {
+                val servers = AgentJson.decodeFromJsonElement(ListSerializer(McpServerConfig.serializer()), req.getValue("servers"))
+                val bad = servers.firstOrNull { !it.url.startsWith("http://") && !it.url.startsWith("https://") }
+                if (bad != null) return failure("MCP server URL must start with http:// or https://: ${bad.url}")
+                settings.mcpServers = servers
+                buildJsonObject { put("mcpServers", AgentJson.encodeToJsonElement(ListSerializer(McpServerConfig.serializer()), servers)) }
+            }
+            "approve" -> {
+                // Unknown or already answered ids are ignored: the card may outlive the run.
+                approvals[req.text("approvalId")]?.complete(req.getValue("allow").jsonPrimitive.boolean)
+                buildJsonObject { put("ok", true) }
+            }
             "cancel" -> {
                 runs[req.text("taskId")]?.cancel()
                 buildJsonObject { put("ok", true) }
@@ -199,6 +245,7 @@ class AgentBridge(
                 store.save(task.copy(status = TaskStatus.FAILED, error = e.message ?: "Run failed", updatedAt = System.currentTimeMillis()))
             } finally {
                 runs.remove(task.id)
+                RunService.end(context)
                 emit(buildJsonObject {
                     put("type", "taskFinished")
                     put("projectId", project.id)
@@ -207,17 +254,18 @@ class AgentBridge(
             }
         }
         runs[task.id] = job
+        RunService.begin(context)
         job.start()
     }
 
-    private fun runner(project: Project): TaskRunner {
+    private suspend fun runner(project: Project): TaskRunner {
         val provider = settings.providers.firstOrNull { it.id == settings.activeProviderId }
             ?: settings.providers.first()
         check(provider.selectedModel.isNotBlank()) { "Choose a model for ${provider.name} in Settings." }
         val root = File(project.path)
         return TaskRunner(
             llm = provider.createClient(),
-            allTools = defaultTools { SkillLoader.load(Workspace(root)) },
+            allTools = defaultTools { SkillLoader.load(Workspace(root)) } + McpRegistry.load(settings.mcpServers),
             store = TaskStore(root),
             projectRoot = root,
             systemPrompt = { ws ->
@@ -228,7 +276,28 @@ class AgentBridge(
                 )
             },
             onEvent = { taskId, event -> emit(eventJson(project.id, taskId, event)) },
+            approve = { taskId, tool, input -> requestApproval(project.id, taskId, tool, input) },
         )
+    }
+
+    /** Pauses the run until the page answers. Cancelling the run cancels the wait too. */
+    private suspend fun requestApproval(projectId: String, taskId: String, tool: String, input: JsonObject): Boolean {
+        val id = UUID.randomUUID().toString()
+        val answer = CompletableDeferred<Boolean>()
+        approvals[id] = answer
+        try {
+            emit(buildJsonObject {
+                put("type", "approval")
+                put("projectId", projectId)
+                put("taskId", taskId)
+                put("approvalId", id)
+                put("tool", tool)
+                put("input", input.toString())
+            })
+            return answer.await()
+        } finally {
+            approvals.remove(id)
+        }
     }
 
     private fun eventJson(projectId: String, taskId: String, event: AgentEvent): JsonObject = buildJsonObject {
