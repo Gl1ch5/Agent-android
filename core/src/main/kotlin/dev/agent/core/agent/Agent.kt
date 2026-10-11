@@ -32,8 +32,9 @@ class Agent(
     private val systemPrompt: () -> String,
     private val onEvent: (AgentEvent) -> Unit = {},
     private val maxSteps: Int = 40,
+    initialHistory: List<ApiMessage> = emptyList(),
 ) {
-    private val history = mutableListOf<ApiMessage>()
+    private val history = initialHistory.toMutableList()
     private val toolsByName = tools.associateBy { it.name }
 
     /** Snapshot of the conversation, for persistence or display. */

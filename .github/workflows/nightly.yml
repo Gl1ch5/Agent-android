@@ -1,6 +1,8 @@
 # Builds a release APK every night and publishes it as the rolling "nightly" pre-release.
 # Signing: if the KEYSTORE_BASE64 secret (plus KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD)
-# is set, the APK is signed with that key so upgrades keep working. Otherwise the debug key is used.
+# is set, the APK is signed with that key. Otherwise it is signed with the committed
+# signing/nightly-fallback.jks, so every nightly is an upgrade of the last one.
+# versionCode is the run number, so it always increases.
 name: Nightly
 
 on:

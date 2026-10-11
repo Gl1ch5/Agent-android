@@ -2,7 +2,6 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
-    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 // CI passes these so every nightly installs as an upgrade of the previous one.
@@ -21,8 +20,9 @@ android {
         versionName = ciVersionName
     }
 
-    // Release signing uses a keystore from CI secrets when present. Otherwise the
-    // debug key is used, so local builds keep working.
+    // Release signing: the keystore from CI secrets when present, otherwise the
+    // committed fallback key. A fixed key is what lets each nightly install over the last.
+    // The fallback is public in this repo, so it only protects upgrades for sideloaded builds.
     signingConfigs {
         create("nightly") {
             val path = System.getenv("KEYSTORE_PATH")
@@ -31,6 +31,11 @@ android {
                 storePassword = System.getenv("KEYSTORE_PASSWORD")
                 keyAlias = System.getenv("KEY_ALIAS")
                 keyPassword = System.getenv("KEY_PASSWORD")
+            } else {
+                storeFile = rootProject.file("signing/nightly-fallback.jks")
+                storePassword = "agent-nightly"
+                keyAlias = "agent-nightly"
+                keyPassword = "agent-nightly"
             }
         }
     }
@@ -38,19 +43,11 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = if (System.getenv("KEYSTORE_PATH") != null) {
-                signingConfigs.getByName("nightly")
-            } else {
-                signingConfigs.getByName("debug")
-            }
+            signingConfig = signingConfigs.getByName("nightly")
         }
         debug {
             applicationIdSuffix = ".debug"
         }
-    }
-
-    buildFeatures {
-        compose = true
     }
 
     compileOptions {
@@ -69,17 +66,8 @@ kotlin {
 
 dependencies {
     implementation(project(":core"))
-
-    val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
-    implementation(composeBom)
-    implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.material3:material3")
-    implementation("androidx.activity:activity-compose:1.9.3")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
-    // Icon pack: Material Symbols-style icons from the Compose extended set (Apache 2.0).
-    implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.activity:activity-ktx:1.9.3")
 
     testImplementation(kotlin("test"))
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
