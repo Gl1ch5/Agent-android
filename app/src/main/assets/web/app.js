@@ -397,7 +397,10 @@ async function renderTask(root, project, taskId, token) {
   root.append(transcript);
 
   liveTools = new Map();
-  root.append(h("section", { class: "transcript", id: "live" }));
+  const live = h("section", { class: "transcript", id: "live" });
+  // Approvals that fired while this task was closed are still waiting for an answer.
+  for (const event of task.pendingApprovals || []) live.append(approvalCard(event));
+  root.append(live);
 
   root.append(changesSection(task.changes));
   if (task.status === "DONE" && task.changes.length) {

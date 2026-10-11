@@ -29,6 +29,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -63,6 +64,8 @@ class AgentBridge(
     private val settings = AppSettings(context)
     private val runs = ConcurrentHashMap<String, Job>()
     private val approvals = ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
+    /** The approval events still waiting for an answer, by approval id. The task view replays them on open. */
+    private val pendingApprovals = ConcurrentHashMap<String, JsonObject>()
 
     @JavascriptInterface
     fun request(raw: String) {
@@ -157,8 +160,11 @@ class AgentBridge(
             "task" -> {
                 val project = projectById(req.text("projectId")) ?: return failure("Project not found.")
                 val task = TaskStore(File(project.path)).load(req.text("taskId")) ?: return failure("Task not found.")
-                AgentJson.encodeToJsonElement(TaskRecord.serializer(), reconcile(TaskStore(File(project.path)), task))
+                val record = AgentJson.encodeToJsonElement(TaskRecord.serializer(), reconcile(TaskStore(File(project.path)), task))
                     .jsonObject
+                // Approvals raised while the task view was closed wait here until the page opens the task.
+                val pending = pendingApprovals.values.filter { it["taskId"]?.jsonPrimitive?.content == task.id }
+                JsonObject(record + ("pendingApprovals" to JsonArray(pending)))
             }
             "newTask" -> {
                 val project = projectById(req.text("projectId")) ?: return failure("Project not found.")
@@ -285,18 +291,21 @@ class AgentBridge(
         val id = UUID.randomUUID().toString()
         val answer = CompletableDeferred<Boolean>()
         approvals[id] = answer
+        val event = buildJsonObject {
+            put("type", "approval")
+            put("projectId", projectId)
+            put("taskId", taskId)
+            put("approvalId", id)
+            put("tool", tool)
+            put("input", input.toString())
+        }
+        pendingApprovals[id] = event
         try {
-            emit(buildJsonObject {
-                put("type", "approval")
-                put("projectId", projectId)
-                put("taskId", taskId)
-                put("approvalId", id)
-                put("tool", tool)
-                put("input", input.toString())
-            })
+            emit(event)
             return answer.await()
         } finally {
             approvals.remove(id)
+            pendingApprovals.remove(id)
         }
     }
 

@@ -27,7 +27,13 @@ class RunService : Service() {
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setOngoing(true)
             .build()
-        startForeground(NOTIFICATION_ID, notification)
+        // Android can refuse to start a foreground service, for example from the background.
+        // The run goes on without the notification in that case.
+        try {
+            startForeground(NOTIFICATION_ID, notification)
+        } catch (e: RuntimeException) {
+            stopSelf()
+        }
         return START_NOT_STICKY
     }
 
@@ -39,14 +45,14 @@ class RunService : Service() {
         /** Call when a task starts. Starts the service for the first active run. */
         fun begin(context: Context) {
             if (active.incrementAndGet() == 1) {
-                context.startForegroundService(Intent(context, RunService::class.java))
+                runCatching { context.startForegroundService(Intent(context, RunService::class.java)) }
             }
         }
 
         /** Call when a task ends, whatever the outcome. Stops the service after the last one. */
         fun end(context: Context) {
             if (active.decrementAndGet() == 0) {
-                context.stopService(Intent(context, RunService::class.java))
+                runCatching { context.stopService(Intent(context, RunService::class.java)) }
             }
         }
     }
