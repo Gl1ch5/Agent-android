@@ -1,32 +1,41 @@
 package dev.agent.app.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,18 +47,16 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import dev.agent.app.AppViewModel
 import dev.agent.app.ChatItem
-import dev.agent.app.ChatViewModel
-import dev.agent.app.PendingApproval
+import dev.agent.app.Project
 
+/** Chat with the agent inside one project. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChatScreen(viewModel: ChatViewModel = viewModel()) {
-    val transcript by viewModel.items.collectAsStateWithLifecycle()
-    val busy by viewModel.busy.collectAsStateWithLifecycle()
-    val approval by viewModel.approval.collectAsStateWithLifecycle()
+fun ChatScreen(viewModel: AppViewModel, project: Project) {
+    val transcript by viewModel.items.collectAsState()
+    val busy by viewModel.busy.collectAsState()
     var draft by rememberSaveable { mutableStateOf("") }
     var showSettings by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
@@ -61,18 +68,36 @@ fun ChatScreen(viewModel: ChatViewModel = viewModel()) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Agent") },
+                navigationIcon = {
+                    IconButton(onClick = viewModel::closeProject) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Projects")
+                    }
+                },
+                title = {
+                    Column {
+                        Text(project.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            project.path,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                },
                 actions = {
-                    TextButton(onClick = viewModel::newChat, enabled = !busy) { Text("New") }
-                    TextButton(onClick = { showSettings = true }) { Text("Settings") }
+                    IconButton(onClick = viewModel::newChat, enabled = !busy) {
+                        Icon(Icons.Filled.Refresh, contentDescription = "New chat")
+                    }
+                    IconButton(onClick = { showSettings = true }) {
+                        Icon(Icons.Filled.Settings, contentDescription = "Model providers")
+                    }
                 },
             )
         },
         bottomBar = {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(12.dp),
-                verticalAlignment = Alignment.Bottom,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 OutlinedTextField(
                     value = draft,
@@ -80,35 +105,39 @@ fun ChatScreen(viewModel: ChatViewModel = viewModel()) {
                     modifier = Modifier.weight(1f),
                     placeholder = { Text("Ask the agent to read, change or test code") },
                     maxLines = 5,
+                    keyboardOptions = KeyboardOptions.Default,
                 )
-                Button(
+                IconButton(
                     onClick = {
                         viewModel.send(draft)
                         draft = ""
                     },
                     enabled = !busy && draft.isNotBlank(),
-                ) { Text("Send") }
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.Send,
+                        contentDescription = "Send",
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
             }
         },
     ) { padding ->
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             itemsIndexed(transcript, key = { _, item -> item.id }) { _, item -> ChatRow(item) }
             if (busy) {
                 item {
-                    CircularProgressIndicator(modifier = Modifier.padding(8.dp))
+                    Text("Working…", style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
     }
 
-    approval?.let { pending ->
-        ApprovalDialog(pending, onDecide = viewModel::resolveApproval)
-    }
     if (showSettings) {
         ProviderSettingsDialog(onDismiss = { showSettings = false })
     }
@@ -117,64 +146,53 @@ fun ChatScreen(viewModel: ChatViewModel = viewModel()) {
 @Composable
 private fun ChatRow(item: ChatItem) {
     when (item) {
-        is ChatItem.User -> Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-        ) {
-            Text(item.text, modifier = Modifier.padding(12.dp))
+        is ChatItem.User -> Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            Text(
+                item.text,
+                modifier = Modifier
+                    .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(14.dp))
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+            )
         }
         is ChatItem.Assistant -> Text(item.text, modifier = Modifier.padding(horizontal = 4.dp))
-        is ChatItem.Error -> Text(
-            item.text,
-            color = MaterialTheme.colorScheme.error,
-            modifier = Modifier.padding(horizontal = 4.dp),
-        )
-        is ChatItem.Tool -> ToolCard(item)
+        is ChatItem.Error -> Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Filled.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.size(8.dp))
+            Text(item.text, color = MaterialTheme.colorScheme.primary)
+        }
+        is ChatItem.Tool -> ToolRow(item)
     }
 }
 
 @Composable
-private fun ToolCard(item: ChatItem.Tool) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+private fun ToolRow(item: ChatItem.Tool) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
+            .clickable { expanded = !expanded }
+            .padding(10.dp),
     ) {
-        Column(modifier = Modifier.padding(10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Filled.Build, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.size(8.dp))
             Text(item.name, style = MaterialTheme.typography.labelLarge)
+        }
+        Text(
+            item.input.take(if (expanded) 4000 else 160),
+            fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+        item.output?.let { output ->
             Text(
-                item.input.take(400),
+                output.take(if (expanded) 8000 else 300),
                 fontFamily = FontFamily.Monospace,
                 fontSize = 12.sp,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
+                color = if (item.isError) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(top = 6.dp).verticalScroll(rememberScrollState()),
             )
-            item.output?.let { output ->
-                Text(
-                    output.take(1200),
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                    color = if (item.isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(top = 6.dp).verticalScroll(rememberScrollState()),
-                )
-            }
         }
     }
-}
-
-@Composable
-private fun ApprovalDialog(pending: PendingApproval, onDecide: (Boolean) -> Unit) {
-    AlertDialog(
-        onDismissRequest = { onDecide(false) },
-        title = { Text("Allow ${pending.toolName}?") },
-        text = {
-            Text(
-                pending.input.take(1500),
-                fontFamily = FontFamily.Monospace,
-                fontSize = 12.sp,
-                modifier = Modifier.verticalScroll(rememberScrollState()),
-            )
-        },
-        confirmButton = { Button(onClick = { onDecide(true) }) { Text("Allow") } },
-        dismissButton = { OutlinedButton(onClick = { onDecide(false) }) { Text("Deny") } },
-    )
 }
