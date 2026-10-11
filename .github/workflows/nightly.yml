@@ -1,0 +1,74 @@
+# Builds a release APK every night and publishes it as the rolling "nightly" pre-release.
+# Signing: if the KEYSTORE_BASE64 secret (plus KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD)
+# is set, the APK is signed with that key so upgrades keep working. Otherwise the debug key is used.
+name: Nightly
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Compute version
+        id: version
+        run: |
+          DATE=$(date -u +%Y%m%d)
+          SHA=$(git rev-parse --short HEAD)
+          echo "date=$DATE" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "VERSION_CODE=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "VERSION_NAME=0.1.0-nightly.$DATE+$SHA" >> "$GITHUB_ENV"
+
+      - name: Restore signing key
+        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/nightly.jks"
+          echo "KEYSTORE_PATH=$RUNNER_TEMP/nightly.jks" >> "$GITHUB_ENV"
+          echo "KEYSTORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }}" >> "$GITHUB_ENV"
+          echo "KEY_ALIAS=${{ secrets.KEY_ALIAS }}" >> "$GITHUB_ENV"
+          echo "KEY_PASSWORD=${{ secrets.KEY_PASSWORD }}" >> "$GITHUB_ENV"
+
+      - name: Test
+        run: ./gradlew :core:test :app:testDebugUnitTest --no-daemon
+
+      - name: Build release APK
+        run: ./gradlew :app:assembleRelease --no-daemon
+
+      - name: Publish nightly pre-release
+        run: |
+          APK_SRC=$(ls app/build/outputs/apk/release/*.apk | head -n1)
+          APK="agent-nightly-${{ steps.version.outputs.date }}.apk"
+          cp "$APK_SRC" "$APK"
+          NOTES="Automatic nightly build of commit ${{ steps.version.outputs.sha }} on $(date -u +%F)."
+          gh release delete nightly --yes --cleanup-tag || true
+          gh release create nightly "$APK" \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "Nightly $(date -u +%F)" \
+            --notes "$NOTES"
