@@ -1,9 +1,11 @@
 package dev.agent.app
 
+import android.Manifest
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
 import android.net.Uri
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
@@ -43,6 +45,9 @@ class MainActivity : ComponentActivity(), AgentBridge.Host {
         )
     }
 
+    // The run notification is shown only once the user allows it. Tasks run either way.
+    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -74,6 +79,9 @@ class MainActivity : ComponentActivity(), AgentBridge.Host {
         web.addJavascriptInterface(bridge, "Android")
         setContentView(web)
         web.loadUrl("file:///android_asset/web/index.html")
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
