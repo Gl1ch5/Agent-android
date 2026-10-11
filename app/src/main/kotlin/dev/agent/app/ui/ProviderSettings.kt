@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.OutlinedButton
@@ -36,6 +37,7 @@ import kotlinx.coroutines.launch
 import java.util.UUID
 
 /** Lists providers, and opens an editor to add, change or remove one. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProviderSettingsDialog(onDismiss: () -> Unit) {
     val context = LocalContext.current
@@ -109,6 +111,7 @@ fun ProviderSettingsDialog(onDismiss: () -> Unit) {
 }
 
 /** Editor for one provider: endpoint, key, model discovery and manual model entry. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ProviderEditor(
     initial: ProviderConfig,
