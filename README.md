@@ -15,7 +15,7 @@ engine is plain Kotlin.
 | `app/src/main/kotlin/dev/agent/app/` | Android shell: `MainActivity` (WebView, insets, folder picker, back), `AgentBridge` (the JS-to-Kotlin API, approvals), `RunService` (foreground service while runs are active), `GitHubOps` (clone, commit, push, pull request), settings and project storage. |
 | `signing/nightly-fallback.jks` | Committed fallback signing key, so each nightly installs over the last. See below. |
 | `.github/workflows/ci.yml` | Engine tests, app unit tests and a debug build on every push and PR. |
-| `.github/workflows/nightly.yml` | Build every 10 minutes, published as the rolling `nightly` pre-release. |
+| `.github/workflows/nightly.yml` | Scheduled every 10 minutes (GitHub treats scheduled runs as best-effort and may delay or skip them), published as the rolling `nightly` pre-release. |
 | `.github/workflows/tag-release.yml` | Manual release from a `vX.Y.Z` tag. |
 | `docs/ADVISOR.md` | Plan for the project advisor and self-improvement loop. |
 

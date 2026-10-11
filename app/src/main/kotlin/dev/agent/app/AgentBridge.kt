@@ -81,6 +81,9 @@ class AgentBridge(
                 handle(op, req)
             } catch (e: Exception) {
                 failure(e.message ?: e::class.java.simpleName)
+            } catch (e: LinkageError) {
+                // A library built for a newer Android or Java can fail to link at call time (JGit, MCP).
+                failure("Not supported on this Android version: ${e.message ?: e::class.java.simpleName}")
             }
             reply(id, result)
         }
